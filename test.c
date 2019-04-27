@@ -2,7 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
+#include <time.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <dirent.h>
 #include <sys/types.h>
@@ -27,7 +28,7 @@ char* read_file(char* path);
 proc_info* parse_status(char* status, proc_info *proc);
 
 proc_info* parse_status(char* status, proc_info *proc) {
-//    printf("%s\n", status);
+    //    printf("%s\n", status);
 
     //Get UID 
     char* uid_line = strstr(status, "Uid:");
@@ -74,6 +75,16 @@ proc_info* parse_status(char* status, proc_info *proc) {
         sscanf(RSS_line, "VmRSS:\t%d ", &VmRSS);
         proc->RSS = VmRSS;
     } 
+
+    char *VmLck_line = strstr(status, "VmLck:");
+    if(VmLck_line) {
+        char VmLck;
+        sscanf(VmLck_line, "VmLck:\t%c ", &VmLck);
+        proc->TTY = VmLck;
+    } else {
+        proc->TTY = '0';
+    }
+
     return proc;
 }
 
@@ -100,7 +111,7 @@ double get_uptime() {
 }
 
 char** split(char *file) {
-    
+
     //Count # of spaces in file
     int spaces = 0;
     int i = 0;
@@ -111,7 +122,6 @@ char** split(char *file) {
         i += 1;
     }
 
-
     //Initialize array for tokens
     char **sp = (char**) malloc(sizeof(char*) * (spaces+1));
 
@@ -119,22 +129,40 @@ char** split(char *file) {
     char delim[2] = " ";
     char *token = strtok(file, delim);
     sp[0] = token;
-    
+
     i = 1; 
     while(token != NULL) {
         token = strtok(NULL, delim);
         sp[i] = token;
         i += 1;
     }
-    
+
     return sp;
 } 
 
+int ismultithreaded(int PID) {
+    char path[50];
+    sprintf(path, "/proc/%d/task", PID);
+
+    DIR *dir = opendir(path);
+    if (dir == NULL)  // opendir returns NULL if couldn't open directory 
+    { 
+        return 0; 
+    } 
+
+    int i = 0;
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL) 
+        i += 1;
+    
+    return i > 3 ? 1 : 0;
+}
+
 proc_info* parse_statfile(char* statfile, proc_info *proc) {
-    //Get info for CPU field
+    /*Get info for CPU field */
     double uptime = get_uptime();
     char** stat = split(statfile);
-    
+
     int utime, stime, cutime, cstime, starttime;
     utime = atof(stat[13]);
     stime = atof(stat[14]);
@@ -142,14 +170,69 @@ proc_info* parse_statfile(char* statfile, proc_info *proc) {
     cstime = atof(stat[16]);
     starttime = atof(stat[21]);
     long Hertz = sysconf(_SC_CLK_TCK);  
-    
+
     int total_time = utime + stime + cutime + cstime;
-    float seconds = uptime - (starttime / Hertz);
-    
+    double seconds = uptime - (starttime / Hertz);
 
     float CPU = 100 * ((total_time / Hertz) / seconds);
     proc->CPU = CPU;
+    int a = 5;
+    printf("%s\n", stat[2]);    
 
+
+    //Fill in major code
+    proc->STAT = (char*) malloc(15);
+    memset(proc->STAT, '\0', 15); 
+
+    proc->STAT[0] = stat[2][0];
+    int end = 1;
+
+    //Minor code < or N: priority
+    if(stat[18][0] == '-' ){
+        proc->STAT[end] = '<';
+        end += 1;
+    }
+
+    else if (stat[18][0] != '0') {
+        proc->STAT[end] = 'N';
+        end += 1;
+    }
+
+    //Minor code L: pages locked into memory 
+    //Value from status file saved in TTY field
+    if(proc->TTY != '0') {
+        proc->STAT[end] = 'L';
+        end += 1;
+    }
+    proc->TTY = '?';
+
+    //Minor code l: is multi-threaded
+    if(ismultithreaded(proc->PID)){
+        proc->STAT[end] = 'l';
+        end += 1;
+    }
+
+    //Minor code s: session leader
+    int sid;
+    sscanf(stat[5], "%d", &sid);
+
+    if(proc->PID == sid){
+        proc->STAT[end] = 's';
+        end += 1;
+    }
+
+    //Minor code +: foreground process group
+    int tpig;
+    sscanf(stat[7], "%d", &tpig);
+    if(tpig == proc->PID) {
+        proc->STAT[end] = '+';
+        end += 1;
+    } 
+
+    proc->STAT[end] = '\0'; 
+
+    /*CALCULATE START TIME */
+        
     return proc;
 }
 
@@ -194,18 +277,22 @@ int main() {
         char* status_file = read_file(path);   
         if(!status_file) 
             continue;
-        
+
         proc = parse_status(status_file, proc);
         free(status_file);
         if(!proc) 
             continue;
-        
+
         memset(path, '\0', 100);
         sprintf(path, "/proc/%s/stat", dp->d_name);
         char* statfile = read_file(path);                
         proc = parse_statfile(statfile, proc);
-        
-        printf("%s\t%.1f\t%d\t%d\t%d\n", proc->User, proc->CPU, proc->PID, proc->VSZ, proc->RSS);
+
+        printf("%s\t%.1f\t%d\t%d\t%d\t\n", proc->User, proc->CPU, proc->PID, proc->VSZ, proc->RSS);
+
+        //        free(proc->STAT);
+        free(proc);
+        free(statfile);
         printf("\n\n");
     }
 }
