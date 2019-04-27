@@ -91,21 +91,10 @@ proc_info* parse_status(char* status, proc_info *proc) {
 //Uptime is first value in /proc/uptime 
 double get_uptime() {
     char* path = "/proc/uptime";
-    int fd = open(path, O_RDONLY);
-
-    char buff[20];
-    memset(buff, '\0', 20);
-    int i = 0;
-
-    //Read characters until we hit first space
-    while(buff[i] != ' '){
-        read(fd, buff+i, 1);
-        i += 1;
-    }
-    buff[i] = '\0';
-    double uptime;
-
+    char *buff = read_file(path);
+    
     //Convert uptime string to double
+    double uptime;
     sscanf(buff, "%lf", &uptime);
     return uptime;
 }
@@ -172,13 +161,10 @@ proc_info* parse_statfile(char* statfile, proc_info *proc) {
     long Hertz = sysconf(_SC_CLK_TCK);  
 
     int total_time = utime + stime + cutime + cstime;
-    double seconds = uptime - (starttime / Hertz);
+    float seconds = uptime - (starttime / Hertz);
 
     float CPU = 100 * ((total_time / Hertz) / seconds);
     proc->CPU = CPU;
-    int a = 5;
-    printf("%s\n", stat[2]);    
-
 
     //Fill in major code
     proc->STAT = (char*) malloc(15);
@@ -232,7 +218,9 @@ proc_info* parse_statfile(char* statfile, proc_info *proc) {
     proc->STAT[end] = '\0'; 
 
     /*CALCULATE START TIME */
-        
+    int minutes = seconds / 60;
+    int hours = minutes / 60;
+    
     return proc;
 }
 
@@ -261,6 +249,13 @@ char* read_file(char* path) {
     return buff;
 }
 
+proc_info* get_mem(proc_info* proc) {
+    char* buff = read_file("/proc/meminfo");
+    int memTotal;
+    sscanf(buff, "MemTotal:       %d kB", &memTotal);
+    proc->MEM = 100 * ((float)proc->RSS / (float)memTotal);
+    return proc;
+}
 
 int main() {
     printf("USER        PID\t%%CPU\t%%MEM\tVSZ\tRSS\tTTY\tSTAT\tSTART\tTIME\tCOMMAND\n");
@@ -287,13 +282,12 @@ int main() {
         sprintf(path, "/proc/%s/stat", dp->d_name);
         char* statfile = read_file(path);                
         proc = parse_statfile(statfile, proc);
+        proc = get_mem(proc);
+        printf("%s\t%d\t%.1f\t%.1f\t%d\t%d\t?\t%s\tSTART\tTIME\tCOMMAND\n", proc->User, proc->PID, proc->CPU, proc->MEM, proc->VSZ, proc->RSS, proc->STAT);
 
-        printf("%s\t%.1f\t%d\t%d\t%d\t\n", proc->User, proc->CPU, proc->PID, proc->VSZ, proc->RSS);
-
-        //        free(proc->STAT);
+        free(proc->STAT);
         free(proc);
         free(statfile);
-        printf("\n\n");
     }
 }
 
