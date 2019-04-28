@@ -244,8 +244,8 @@ char* read_file(char* path) {
             buff = buff2;
         }
     }
-
-    //buff[i] = '\0';
+    
+    close(fd);
     return buff;
 }
 
@@ -254,12 +254,65 @@ proc_info* get_mem(proc_info* proc) {
     int memTotal;
     sscanf(buff, "MemTotal:       %d kB", &memTotal);
     proc->MEM = 100 * ((float)proc->RSS / (float)memTotal);
+    free(buff);
+
+    return proc;
+}
+
+proc_info* get_command(proc_info* proc) {
+    char path[50];
+    sprintf(path, "/proc/%d/cmdline", proc->PID);
+    char *buff = (char*) malloc(1024);
+    memset(buff, '\0', 1024);
+
+    int fd = open(path, O_RDONLY);
+    
+    int status = 1;
+    int i = 0;
+    char c;
+    while (status > 0) {
+        status = read(fd, &c, 1);
+        if(c == '\0') {
+            buff[i] = ' ';
+        } else {
+            buff[i] = c;
+        }
+        i += 1;
+    }
+    close(fd);
+
+    //If there weren't any command line arguments in cmdline
+    //we need to look in proc/[pid]/comm
+    if(i == 1) {
+        memset(buff, '\0', 1024);
+        memset(path, '\0', 50);
+        sprintf(path, "/proc/%d/comm", proc->PID);
+        fd = open(path, O_RDONLY);
+        status = 1;
+        buff[0] = '[';
+        i = 1;
+        while (status > 0) {
+            status = read(fd, &c, 1);
+            if(c == '\0') {
+                buff[i] = ' ';
+            } else {
+                buff[i] = c;
+            }
+            i += 1;
+        }
+        buff[i-2] = ']';
+        buff[i-1] = '\0';
+    }
+
+    proc->COMMAND = buff;
+    
+    close(fd);
     return proc;
 }
 
 int main() {
-    printf("USER        PID\t%%CPU\t%%MEM\tVSZ\tRSS\tTTY\tSTAT\tSTART\tTIME\tCOMMAND\n");
-
+    //printf("USER      PID\t%%CPU\t%%MEM\tVSZ\tRSS\tTTY\tSTAT\tSTART\tTIME\tCOMMAND\n");
+    printf("%-16s%8s%8s%8s%10s%8s%8s%8s%8s%8s%10s\n", "USER", "PID", "%CPU", "%MEM", "VSZ", "RSS", "TTY", "STAT", "START", "TIME", "COMMAND");
     DIR *dir = opendir("/proc");
     struct dirent *dp;
     while((dp = readdir(dir) ) != NULL) {
@@ -283,9 +336,12 @@ int main() {
         char* statfile = read_file(path);                
         proc = parse_statfile(statfile, proc);
         proc = get_mem(proc);
-        printf("%s\t%d\t%.1f\t%.1f\t%d\t%d\t?\t%s\tSTART\tTIME\tCOMMAND\n", proc->User, proc->PID, proc->CPU, proc->MEM, proc->VSZ, proc->RSS, proc->STAT);
+        proc = get_command(proc);
+        //printf("%s%8d%8.1f%8.1f%8d%8d\t?%8s\tSTART\tTIME%8s\n", proc->User, proc->PID, proc->CPU, proc->MEM, proc->VSZ, proc->RSS, proc->STAT, proc->COMMAND);
+        printf("%-16s%8d%8.1f%8.1f%10d%8d%8s%8s%8s%8s   %s\n",proc->User, proc->PID, proc->CPU, proc->MEM, proc->VSZ, proc->RSS, "?", proc->STAT, "START", "TIME", proc->COMMAND);
 
         free(proc->STAT);
+        free(proc->COMMAND);
         free(proc);
         free(statfile);
     }
